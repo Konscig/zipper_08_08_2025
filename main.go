@@ -20,6 +20,13 @@ var allTasks = make(map[string]*Task)
 var tasksMutex sync.Mutex
 var semaphore = make(chan struct{}, 3)
 
+// Task представляет собой задачу для загрузки файлов.
+//
+// Поля:
+//   - UUID: уникальный идентификатор задачи.
+//   - Files: список файлов, загруженных в задачу.
+//   - Status: статус задачи (например, "created", "full", "done").
+//   - IsFull: флаг, указывающий, заполнена ли задача тремя файла
 type Task struct {
 	UUID   uuid.UUID `json:"uuid"`
 	Files  []string  `json:"files"`
