@@ -245,11 +245,16 @@ func downloadZip(c *gin.Context) error {
 	if task, exists := allTasks[uuid]; exists {
 		task.Status = "done"
 	}
+
+	c.Header("Content-Type", "application/zip")
+	c.FileAttachment(zipFileName, zipFileName)
+	c.Header("Content-Transfer-Encoding", "binary")
+
 	c.JSON(200, gin.H{
 		"message": "zip file created successfully. downloading will start automatically. files will be removed from the server in 5 sec.",
 		"name":    zipFileName,
 	})
-	c.FileAttachment(zipFileName, zipFileName)
+
 	time.Sleep(5 * time.Second)
 	go removeFiles(c)
 
@@ -286,9 +291,6 @@ func main() {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(200, gin.H{
-			"message": "files uploaded",
-		})
 	})
 	uploadGroup.GET("/:uuid/status", func(c *gin.Context) {
 		getStatus(c)
