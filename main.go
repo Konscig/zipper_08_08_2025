@@ -227,12 +227,13 @@ func uploadFiles(files []string, c *gin.Context) error {
 	defer tasksMutex.Unlock()
 
 	if len(task.Files) == 3 {
-		go func() {
-			defer func() { <-semaphore }()
-			task.IsFull = true
-			task.Status = "full"
-		}()
-		c.Redirect(302, "/task/"+task.UUID.String()+"/download")
+		task.IsFull = true
+		task.Status = "full"
+
+		c.JSON(200, gin.H{
+			"message":       "task is full",
+			"download_link": c.Request.Host + "/task/" + task.UUID.String() + "/download",
+		})
 	}
 	return nil
 }
@@ -316,8 +317,11 @@ func downloadZip(c *gin.Context) error {
 
 	zipWriter.Close()
 	c.FileAttachment(zipFileName, filepath.Base(zipFileName))
-	go removeFiles(c)
 
+	go func() {
+		time.Sleep(15 * time.Second)
+		removeFiles(c)
+	}()
 	return nil
 }
 
@@ -364,15 +368,6 @@ func main() {
 			fmt.Printf("Error downloading zip: %v\n", err)
 			return
 		}
-
-		go func() {
-			time.Sleep(15 * time.Second)
-			removeFiles(c)
-		}()
-
-		c.JSON(200, gin.H{
-			"message": "zip file created successfully. downloading will start automatically. files will be removed from the server in 15 sec.",
-		})
 	})
 	host := fmt.Sprintf("%s:%s", os.Getenv("HOST"), os.Getenv("PORT"))
 	router.Run(host)
