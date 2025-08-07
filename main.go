@@ -258,12 +258,6 @@ func downloadZip(c *gin.Context) error {
 
 	zipWriter.Close()
 	c.FileAttachment(zipFileName, filepath.Base(zipFileName))
-
-	c.JSON(200, gin.H{
-		"message": "zip file created successfully. downloading will start automatically. files will be removed from the server in 5 sec.",
-		"name":    zipFileName,
-	})
-
 	go removeFiles(c)
 
 	return nil
@@ -314,6 +308,10 @@ func main() {
 			time.Sleep(15 * time.Second)
 			removeFiles(c)
 		}()
+
+		c.JSON(200, gin.H{
+			"message": "zip file created successfully. downloading will start automatically. files will be removed from the server in 15 sec.",
+		})
 	})
 	host := fmt.Sprintf("%s:%s", os.Getenv("HOST"), os.Getenv("PORT"))
 	router.Run(host)
