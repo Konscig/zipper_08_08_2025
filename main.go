@@ -160,6 +160,7 @@ func uploadFiles(files []string, c *gin.Context) error {
 	tasksMutex.Lock()
 	if task.IsFull {
 		c.JSON(400, gin.H{"error": "task is already full"})
+		tasksMutex.Unlock()
 		return fmt.Errorf("task with uuid %s is already full", uuid)
 	}
 	tasksMutex.Unlock()
@@ -226,15 +227,17 @@ func uploadFiles(files []string, c *gin.Context) error {
 	tasksMutex.Lock()
 	defer tasksMutex.Unlock()
 
+	response := gin.H{
+		"message":       "files uploaded successfully",
+		"download_link": "http://" + c.Request.Host + "/task/" + task.UUID.String() + "/download",
+	}
+
 	if len(task.Files) == 3 {
 		task.IsFull = true
 		task.Status = "full"
-
-		c.JSON(200, gin.H{
-			"message":       "task is full",
-			"download_link": c.Request.Host + "/task/" + task.UUID.String() + "/download",
-		})
+		response["status"] = "full"
 	}
+	c.JSON(200, response)
 	return nil
 }
 
@@ -351,9 +354,6 @@ func main() {
 			return
 		}
 		uploadFiles(files, c)
-		c.JSON(200, gin.H{
-			"message": "files uploaded successfully",
-		})
 	})
 	uploadGroup.GET("/:uuid/status", func(c *gin.Context) {
 		getStatus(c)
