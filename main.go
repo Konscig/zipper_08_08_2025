@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -25,8 +27,39 @@ type Task struct {
 	IsFull bool      `json:"isFull"`
 }
 
+func checkContentType(c *gin.Context) error {
+	types := []string{"application/pdf", "image/jpeg"}
+
+	url := c.Query("file")
+	if url == "" {
+		c.JSON(400, gin.H{"error": "file parameter is required"})
+		return fmt.Errorf("file parameter is missing")
+	}
+
+	resp, err := req.Head(url)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "head request failed"})
+		return fmt.Errorf("head request failed: %w", err)
+	}
+	if resp.Response().StatusCode != 200 {
+		c.JSON(400, gin.H{"error": "file not found"})
+		return fmt.Errorf("file not found: %w", err)
+	}
+
+	contentType := resp.Response().Header.Get("Content-Type")
+	for _, t := range types {
+		if strings.HasPrefix(contentType, t) {
+			return nil
+		}
+	}
+
+	c.JSON(415, gin.H{"error": "unsupported file type", "got": contentType})
+	return fmt.Errorf("unsupported file type: %s", contentType)
+}
+
 func createSession(c *gin.Context) {
 	if len(allTasks) < 3 {
+		semaphore <- struct{}{}
 		task := &Task{
 			UUID:   uuid.New(),
 			Files:  []string{},
@@ -95,6 +128,10 @@ func uploadFiles(files []string, c *gin.Context) error {
 	errCh := make(chan error, len(files))
 
 	for _, url := range files {
+		if err := checkContentType(c); err != nil {
+			errCh <- err
+			continue
+		}
 		wg.Add(1)
 		go func(url string) {
 			defer wg.Done()
@@ -135,19 +172,33 @@ func uploadFiles(files []string, c *gin.Context) error {
 
 	tasksMutex.Lock()
 	defer tasksMutex.Unlock()
+
 	if len(task.Files) == 3 {
-		task.IsFull = true
-		task.Status = "full"
-		go func(uuid string) {
-			semaphore <- struct{}{}
+		go func() {
 			defer func() { <-semaphore }()
+			task.IsFull = true
+			task.Status = "full"
 			err := downloadZip(c)
 			if err != nil {
 				fmt.Printf("Error creating zip for task %s: %v\n", uuid, err)
 			}
-		}(uuid)
+		}()
 	}
 	return nil
+}
+
+func removeFiles(c *gin.Context) {
+	uuid := c.Param("uuid")
+	dirName := "download_" + uuid
+
+	tasksMutex.Lock()
+	delete(allTasks, uuid)
+	tasksMutex.Unlock()
+
+	os.RemoveAll(dirName)
+	c.JSON(200, gin.H{
+		"message": "files removed successfully",
+	})
 }
 
 func downloadZip(c *gin.Context) error {
@@ -195,9 +246,13 @@ func downloadZip(c *gin.Context) error {
 		task.Status = "done"
 	}
 	c.JSON(200, gin.H{
-		"message": "zip file created successfully",
+		"message": "zip file created successfully. downloading will start automatically. files will be removed from the server in 5 sec.",
 		"name":    zipFileName,
 	})
+	c.FileAttachment(zipFileName, zipFileName)
+	time.Sleep(5 * time.Second)
+	go removeFiles(c)
+
 	return nil
 }
 
@@ -239,7 +294,12 @@ func main() {
 		getStatus(c)
 	})
 	uploadGroup.GET("/:uuid/download", func(c *gin.Context) {
-		downloadZip(c)
+		go func() {
+			defer func() { <-semaphore }()
+			downloadZip(c)
+			time.Sleep(5 * time.Second)
+			go removeFiles(c)
+		}()
 	})
 	host := fmt.Sprintf("%s:%s", os.Getenv("HOST"), os.Getenv("PORT"))
 	router.Run(host)
