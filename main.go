@@ -347,6 +347,9 @@ func main() {
 			return
 		}
 		uploadFiles(files, c)
+		c.JSON(200, gin.H{
+			"message": "files uploaded successfully",
+		})
 	})
 	uploadGroup.GET("/:uuid/status", func(c *gin.Context) {
 		getStatus(c)
