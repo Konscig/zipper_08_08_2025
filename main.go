@@ -3,23 +3,44 @@ package main
 import (
 	"fmt"
 	"os"
-	"time"
+	"path/filepath"
+	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/imroc/req"
 	"github.com/joho/godotenv"
 )
 
-func parseFile(files []string) error {
-	dirName := "download_" + time.Now().String()
-	err := os.Mkdir(dirName, 0777)
-	if err == nil {
-		return fmt.Errorf("failed to create directory: %v", err)
+func CheckOrCreateDirMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		dirName := "download_" + uuid.New().String()
+		if _, err := os.Stat(dirName); os.IsNotExist(err) {
+			err := os.Mkdir(dirName, 0777)
+			if err != nil {
+				c.JSON(500, gin.H{"error": "failed to create directory"})
+				c.Abort()
+				return
+			}
+			c.Set("dirName", dirName)
+			c.Next()
+		}
+	}
+}
+
+func downladFiles(files []string, c *gin.Context) error {
+	dirName, ok := c.Get("dirName")
+	if !ok {
+		return fmt.Errorf("failed to get dirName")
 	}
 
-	go func() {
-		ch := make(chan string, 1)
-		for _, url := range files {
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(files))
+
+	for _, url := range files {
+		wg.Add(1)
+		go func(url string) {
+			defer wg.Done()
 			progress := func(current, total int64) {
 				fmt.Println(float32(current)/float32(total)*100, "%")
 			}
@@ -27,11 +48,23 @@ func parseFile(files []string) error {
 			r := req.New()
 			file, err := r.Get(url, req.DownloadProgress(progress))
 			if err != nil {
-				file.ToFile(dirName + "/" + time.Now().String())
+				errCh <- fmt.Errorf("failed to download file %s: %w", url, err)
+				return
 			}
-			ch <- file
-		}
-	}()
+			fileName := filepath.Base(url)
+			savePath := filepath.Join(dirName.(string), fileName)
+			err = file.ToFile(savePath)
+			if err != nil {
+				errCh <- fmt.Errorf("failed to save file: %w", err)
+			}
+		}(url)
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		return err
+	}
 	return nil
 }
 
@@ -40,10 +73,9 @@ func main() {
 
 	router := gin.Default()
 
-	router.GET("/", index)
-
-	router.GET("/upload", func(c *gin.Context) {
-		files := c.QueryArray("files")
+	uploadGroup := router.Group("/", CheckOrCreateDirMiddleware())
+	uploadGroup.GET("/upload", func(c *gin.Context) {
+		files := c.QueryArray("file")
 		if len(files) == 0 {
 			c.JSON(400, gin.H{
 				"error": "no files uploaded",
@@ -56,7 +88,11 @@ func main() {
 			})
 			return
 		}
-		parseFile(files)
+		err := downladFiles(files, c)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(200, gin.H{
 			"message": "files uploaded",
 		})
@@ -69,11 +105,6 @@ func main() {
 	router.Run(host)
 }
 
-func index(c *gin.Context) {
-	c.JSON(200, gin.H{
-		"message": "Hello World!",
-	})
-}
 func createZip(c *gin.Context) {
 	// Создаем новый архив
 }
