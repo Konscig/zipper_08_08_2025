@@ -151,7 +151,20 @@ func uploadFiles(files []string, c *gin.Context) error {
 				return
 			}
 			fileName := filepath.Base(url)
+			ext := filepath.Ext(fileName)
+			base := strings.TrimSuffix(fileName, ext)
 			savePath := filepath.Join(dirName, fileName)
+			i := 1
+
+			for {
+				if _, err := os.Stat(savePath); os.IsNotExist(err) {
+					break
+				}
+				fileName = fmt.Sprintf("%s_(%d)%s", base, i, ext)
+				savePath = filepath.Join(dirName, fileName)
+				i++
+			}
+
 			err = file.ToFile(savePath)
 			if err != nil {
 				errCh <- fmt.Errorf("failed to save file: %w", err)
@@ -178,11 +191,8 @@ func uploadFiles(files []string, c *gin.Context) error {
 			defer func() { <-semaphore }()
 			task.IsFull = true
 			task.Status = "full"
-			err := downloadZip(c)
-			if err != nil {
-				fmt.Printf("Error creating zip for task %s: %v\n", uuid, err)
-			}
 		}()
+		c.Redirect(302, "/task/"+task.UUID.String()+"/download")
 	}
 	return nil
 }
@@ -246,16 +256,14 @@ func downloadZip(c *gin.Context) error {
 		task.Status = "done"
 	}
 
-	c.Header("Content-Type", "application/zip")
-	c.FileAttachment(zipFileName, zipFileName)
-	c.Header("Content-Transfer-Encoding", "binary")
+	zipWriter.Close()
+	c.FileAttachment(zipFileName, filepath.Base(zipFileName))
 
 	c.JSON(200, gin.H{
 		"message": "zip file created successfully. downloading will start automatically. files will be removed from the server in 5 sec.",
 		"name":    zipFileName,
 	})
 
-	time.Sleep(5 * time.Second)
 	go removeFiles(c)
 
 	return nil
@@ -286,21 +294,25 @@ func main() {
 			})
 			return
 		}
-		err := uploadFiles(files, c)
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
+		uploadFiles(files, c)
 	})
 	uploadGroup.GET("/:uuid/status", func(c *gin.Context) {
 		getStatus(c)
 	})
 	uploadGroup.GET("/:uuid/download", func(c *gin.Context) {
+		defer func() {
+			<-semaphore
+		}()
+
+		err := downloadZip(c)
+		if err != nil {
+			fmt.Printf("Error downloading zip: %v\n", err)
+			return
+		}
+
 		go func() {
-			defer func() { <-semaphore }()
-			downloadZip(c)
-			time.Sleep(5 * time.Second)
-			go removeFiles(c)
+			time.Sleep(15 * time.Second)
+			removeFiles(c)
 		}()
 	})
 	host := fmt.Sprintf("%s:%s", os.Getenv("HOST"), os.Getenv("PORT"))
