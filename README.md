@@ -58,6 +58,21 @@
   </tr>
   <tr>
     <td>
+      /:uuid/status/
+    </td>
+    <td>
+      Получение статуса сессии
+    </td>
+    <td>
+      json { "uuid":task.UUID, <br>
+      		   "filesCount": len(task.Files), <br>
+      		   "status":     task.Status, <br>
+      		   "isFull":     task.IsFull, <br>
+      }
+    </td>
+  </tr>
+  <tr>
+    <td>
       /:uuid/download/
     </td>
     <td>
