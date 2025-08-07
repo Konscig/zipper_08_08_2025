@@ -1,7 +1,9 @@
 package main
 
 import (
+	"archive/zip"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -24,30 +26,36 @@ type Task struct {
 }
 
 func createSession(c *gin.Context) {
-	task := &Task{
-		UUID:   uuid.New(),
-		Files:  []string{},
-		Status: "created",
-		IsFull: false,
-	}
-
-	dirName := "download_" + task.UUID.String()
-	if _, err := os.Stat(dirName); os.IsNotExist(err) {
-		err := os.Mkdir(dirName, 0777)
-		if err != nil {
-			c.JSON(500, gin.H{"error": "failed to create directory"})
-			return
+	if len(allTasks) < 3 {
+		task := &Task{
+			UUID:   uuid.New(),
+			Files:  []string{},
+			Status: "created",
+			IsFull: false,
 		}
+
+		dirName := "download_" + task.UUID.String()
+		if _, err := os.Stat(dirName); os.IsNotExist(err) {
+			err := os.Mkdir(dirName, 0777)
+			if err != nil {
+				c.JSON(500, gin.H{"error": "failed to create directory"})
+				return
+			}
+		}
+
+		tasksMutex.Lock()
+		allTasks[task.UUID.String()] = task
+		tasksMutex.Unlock()
+
+		c.JSON(200, gin.H{
+			"status": task.Status,
+			"uuid":   task.UUID.String(),
+		})
+	} else {
+		c.JSON(503, gin.H{
+			"error": "maximum number of tasks reached",
+		})
 	}
-
-	tasksMutex.Lock()
-	allTasks[task.UUID.String()] = task
-	tasksMutex.Unlock()
-
-	c.JSON(200, gin.H{
-		"status": task.Status,
-		"uuid":   task.UUID.String(),
-	})
 }
 
 func getStatus(c *gin.Context) {
@@ -76,6 +84,13 @@ func uploadFiles(files []string, c *gin.Context) error {
 		return fmt.Errorf("task with uuid %s not found", uuid)
 	}
 
+	tasksMutex.Lock()
+	if task.IsFull {
+		c.JSON(400, gin.H{"error": "task is already full"})
+		return fmt.Errorf("task with uuid %s is already full", uuid)
+	}
+	tasksMutex.Unlock()
+
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(files))
 
@@ -83,6 +98,15 @@ func uploadFiles(files []string, c *gin.Context) error {
 		wg.Add(1)
 		go func(url string) {
 			defer wg.Done()
+
+			tasksMutex.Lock()
+			if len(task.Files) >= 3 {
+				tasksMutex.Unlock()
+				errCh <- fmt.Errorf("task with uuid %s is already full", uuid)
+				return
+			}
+			tasksMutex.Unlock()
+
 			r := req.New()
 			file, err := r.Get(url)
 			if err != nil {
@@ -113,7 +137,7 @@ func uploadFiles(files []string, c *gin.Context) error {
 	defer tasksMutex.Unlock()
 	if len(task.Files) == 3 {
 		task.IsFull = true
-		task.Status = "ready to zip"
+		task.Status = "full"
 		go func(uuid string) {
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
@@ -130,26 +154,50 @@ func downloadZip(c *gin.Context) error {
 	uuid := c.Param("uuid")
 	dirName := "download_" + uuid
 	zipFileName := dirName + ".zip"
-
-	zip, err := os.Create(zipFileName)
+	zipFile, err := os.Create(zipFileName)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "failed to create zip file"})
 		return fmt.Errorf("failed to create zip file: %w", err)
 	}
+	defer zipFile.Close()
 
-	defer zip.Close()
+	zipWriter := zip.NewWriter(zipFile)
+	defer zipWriter.Close()
 	files, err := os.ReadDir(dirName)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "failed to read directory"})
 		return fmt.Errorf("failed to read directory %s: %w", dirName, err)
 	}
+
 	for _, file := range files {
-		_, err := zip.Write([]byte(file.Name() + "\n"))
+		filePath := filepath.Join(dirName, file.Name())
+		srcFile, err := os.Open(filePath)
 		if err != nil {
-			c.JSON(500, gin.H{"error": "failed to write to zip file"})
-			return fmt.Errorf("failed to write to zip file: %w", err)
+			c.JSON(500, gin.H{"error": "failed to open file: " + file.Name()})
+			return fmt.Errorf("failed to open file: %w", err)
+		}
+		zipEntry, err := zipWriter.Create(file.Name())
+		if err != nil {
+			srcFile.Close()
+			c.JSON(500, gin.H{"error": "failed to create zip entry for file: " + file.Name()})
+			return fmt.Errorf("failed to create zip entry: %w", err)
+		}
+		_, err = io.Copy(zipEntry, srcFile)
+		srcFile.Close()
+		if err != nil {
+			c.JSON(500, gin.H{"error": "failed to write file to zip: " + file.Name()})
+			return fmt.Errorf("failed to write file to zip: %w", err)
 		}
 	}
+	tasksMutex.Lock()
+	defer tasksMutex.Unlock()
+	if task, exists := allTasks[uuid]; exists {
+		task.Status = "done"
+	}
+	c.JSON(200, gin.H{
+		"message": "zip file created successfully",
+		"name":    zipFileName,
+	})
 	return nil
 }
 
