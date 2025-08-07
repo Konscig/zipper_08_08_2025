@@ -27,6 +27,14 @@ type Task struct {
 	IsFull bool      `json:"isFull"`
 }
 
+// checkContentType проверяет тип скачиваемого файла.
+//
+// Параметры:
+//   - c: указатель на контекст Gin (*gin.Context).
+//
+// Возвращает:
+//   - nil (Если тип файла удовлетворительный).
+//   - ошибку, если формат неверный.
 func checkContentType(c *gin.Context) error {
 	types := []string{"application/pdf", "image/jpeg"}
 
@@ -57,6 +65,14 @@ func checkContentType(c *gin.Context) error {
 	return fmt.Errorf("unsupported file type: %s", contentType)
 }
 
+// createSession создает сессию для загрузки файлов.
+//
+// Параметры:
+//   - c: указатель на контекст Gin (*gin.Context).
+//
+// Возвращает:
+//   - nil.
+//   - err если возникла ошибка загрузки.
 func createSession(c *gin.Context) {
 	if len(allTasks) < 3 {
 		semaphore <- struct{}{}
@@ -91,6 +107,14 @@ func createSession(c *gin.Context) {
 	}
 }
 
+// getStatus возвращает статус задачи по её UUID.
+//
+// Параметры:
+//   - c: указатель на контекст Gin (*gin.Context).
+//
+// Возвращает:
+//
+//	json с информацией о задаче, включая UUID, количество файлов и статус задачи.
 func getStatus(c *gin.Context) {
 	uuid := c.Param("uuid")
 
@@ -105,6 +129,15 @@ func getStatus(c *gin.Context) {
 	tasksMutex.Unlock()
 }
 
+// uploadFiles загружает файлы в каталог задачи по её UUID.
+//
+// Параметры:
+//   - c: указатель на контекст Gin (*gin.Context).
+//
+// Возвращает:
+//
+//   - nil (Если файлы успешно загружены).
+//   - ошибку, если возникла ошибка загрузки или задача уже заполнена.
 func uploadFiles(files []string, c *gin.Context) error {
 	uuid := c.Param("uuid")
 	dirName := "download_" + uuid
@@ -197,6 +230,15 @@ func uploadFiles(files []string, c *gin.Context) error {
 	return nil
 }
 
+// removeFiles удаляет файлы и задачу по её UUID.
+//
+// Параметры:
+//   - c: указатель на контекст Gin (*gin.Context).
+//
+// Возвращает:
+//
+//   - nil.
+//   - ошибку, если возникла ошибка удаления файлов или задачи.
 func removeFiles(c *gin.Context) {
 	uuid := c.Param("uuid")
 	dirName := "download_" + uuid
@@ -211,6 +253,15 @@ func removeFiles(c *gin.Context) {
 	})
 }
 
+// downloadZip формирует zip и отправляет его пользователю.
+//
+// Параметры:
+//   - c: указатель на контекст Gin (*gin.Context).
+//
+// Возвращает:
+//
+//   - nil.
+//   - ошибку, если возникла ошибка при создании zip-файла или чтении директории.
 func downloadZip(c *gin.Context) error {
 	uuid := c.Param("uuid")
 	dirName := "download_" + uuid
